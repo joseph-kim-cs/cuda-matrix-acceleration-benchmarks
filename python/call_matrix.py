@@ -1,56 +1,25 @@
 import ctypes
-import os
-import time
 import numpy as np
+import time
 
+# Load shared library from the CUDA implementation
+lib = ctypes.cdll.LoadLibrary("../cuda/libmatrix.so")
 
-def load_library():
-    # assumes libmatrix.so is in the same directory as this script.
-    here = os.path.dirname(os.path.abspath(__file__))
-    lib_path = os.path.join(here, "libmatrix.so")
+lib.gpu_matrix_multiply.argtypes = [
+    np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+    np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+    np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
+    ctypes.c_int
+]
 
-    if not os.path.exists(lib_path):
-        raise FileNotFoundError(
-            f"Could not find {lib_path}. Make sure you compiled Step 7.2:\n"
-            "  nvcc -Xcompiler -fPIC -shared matrix_lib.cu -o libmatrix.so"
-        )
+N = 1024
 
-    return ctypes.cdll.LoadLibrary(lib_path)
+A = np.random.rand(N, N).astype(np.float32)
+B = np.random.rand(N, N).astype(np.float32)
+C = np.zeros((N, N), dtype=np.float32)
 
+start = time.time()
+lib.gpu_matrix_multiply(A.ravel(), B.ravel(), C.ravel(), N)
+end = time.time()
 
-def main():
-    lib = load_library()
-
-# contacts ctypes
-    lib.gpu_matrix_multiply.argtypes = [
-        np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
-        np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
-        np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
-        ctypes.c_int,
-    ]
-    lib.gpu_matrix_multiply.restype = None 
-
-    N = 1024
-
-    # create input matrices and output buffer
-    A = np.random.rand(N, N).astype(np.float32)
-    B = np.random.rand(N, N).astype(np.float32)
-    C = np.zeros((N, N), dtype=np.float32)
-
-    A_flat = np.ascontiguousarray(A.ravel())
-    B_flat = np.ascontiguousarray(B.ravel())
-    C_flat = np.ascontiguousarray(C.ravel())
-
-    lib.gpu_matrix_multiply(A_flat, B_flat, C_flat, N)
-
-    # timed run
-    start = time.perf_counter()
-    lib.gpu_matrix_multiply(A_flat, B_flat, C_flat, N)
-    end = time.perf_counter()
-
-    C_result = C_flat.reshape(N, N)
-
-    print(f"Python call to CUDA library completed in {end - start:.6f} seconds (N={N})")
-
-if __name__ == "__main__":
-    main()
+print(f"Python → CUDA shared library time (N={N}): {end - start:.4f} seconds")

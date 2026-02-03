@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define TILE_WIDTH 16
 
@@ -68,4 +69,89 @@ extern "C" void gpu_matrix_multiply(float *h_A, float *h_B, float *h_C, int N) {
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
+}
+
+
+// ADDING MORE LIBRARY FUNCTIONS FOR CONVOLUTION 
+
+static inline void cudaCheck(cudaError_t err, const char* msg) {
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA error: %s: %s\n", msg, cudaGetErrorString(err));
+        exit(1);
+    }
+}
+
+// Naive 2D convolution: output[y, x] = sum_{j,i} input[y+j, x+i] * kernel[j,i]
+__global__ void conv2d_same_kernel(
+    const float* __restrict__ input,
+    const float* __restrict__ kernel,
+    float* __restrict__ output,
+    int N,
+    int K
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x; //x will be column
+    int y = blockIdx.y * blockDim.y + threadIdx.y; //y will be row
+
+    if (x >= N || y >= N) return;
+
+    int r = K / 2; // kernel radius
+    float sum = 0.0f;
+
+    for (int ky = 0; ky < K; ky++) {
+        int in_y = y + (ky - r);
+        if (in_y < 0 || in_y >= N) continue;
+
+        for (int kx = 0; kx < K; kx++) {
+            int in_x = x + (kx - r);
+            if (in_x < 0 || in_x >= N) continue;
+
+            float in_val = input[in_y * N + in_x];
+            float k_val  = kernel[ky * K + kx];
+            sum += in_val * k_val;
+        }
+    }
+
+    output[y * N + x] = sum;
+}
+
+// input:  N*N float32
+// kernel: K*K float32
+// output: N*N float32
+extern "C" void gpu_convolution_same(
+    const float* input,
+    const float* kernel,
+    float* output,
+    int N,
+    int K
+) {
+    if (N <= 0 || K <= 0 || (K % 2) == 0) {
+        fprintf(stderr, "gpu_convolution_same: N must be > 0 and K must be odd and > 0\n");
+        exit(1);
+    }
+
+    size_t bytes_img = (size_t)N * (size_t)N * sizeof(float);
+    size_t bytes_k   = (size_t)K * (size_t)K * sizeof(float);
+
+    float *d_in = nullptr, *d_k = nullptr, *d_out = nullptr;
+
+    cudaCheck(cudaMalloc((void**)&d_in, bytes_img), "cudaMalloc d_in");
+    cudaCheck(cudaMalloc((void**)&d_k,  bytes_k),   "cudaMalloc d_k");
+    cudaCheck(cudaMalloc((void**)&d_out, bytes_img),"cudaMalloc d_out");
+
+    cudaCheck(cudaMemcpy(d_in, input, bytes_img, cudaMemcpyHostToDevice), "H2D input");
+    cudaCheck(cudaMemcpy(d_k,  kernel, bytes_k,  cudaMemcpyHostToDevice), "H2D kernel");
+
+    dim3 block(16, 16);
+    dim3 grid((N + block.x - 1) / block.x,
+              (N + block.y - 1) / block.y);
+
+    conv2d_same_kernel<<<grid, block>>>(d_in, d_k, d_out, N, K);
+    cudaCheck(cudaGetLastError(), "conv2d kernel launch");
+    cudaCheck(cudaDeviceSynchronize(), "conv2d kernel sync");
+
+    cudaCheck(cudaMemcpy(output, d_out, bytes_img, cudaMemcpyDeviceToHost), "D2H output");
+
+    cudaFree(d_in);
+    cudaFree(d_k);
+    cudaFree(d_out);
 }
